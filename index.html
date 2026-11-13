@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>채팅방</title>
+<style>
+:root{--bg:#f6f6f4;--card:#fff;--tx:#1f1f1d;--sub:#77756f;--ac:#3b6ef5;--bd:#e3e1dc;--ot:#ecebe7;--sys:#9a978f;--red:#d64545}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#212120;--tx:#eeede9;--sub:#98958d;--bd:#33332f;--ot:#2d2d2a}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--tx);font:15px/1.5 -apple-system,"Apple SD Gothic Neo","Malgun Gothic",sans-serif}
+.wrap{max-width:640px;margin:0 auto;height:100%;display:flex;flex-direction:column;position:relative}
+header{padding:14px 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--bd);background:var(--card)}
+header h1{font-size:18px;margin:0;flex:1}
+button{font:inherit;cursor:pointer}
+.lnk{background:none;border:0;color:var(--ac);padding:4px 6px}
+.nick{border:1px solid var(--bd);background:var(--bg);color:var(--tx);border-radius:8px;padding:6px 10px;width:100px;font:inherit}
+#list{padding:12px;overflow-y:auto;display:grid;grid-template-columns:1fr 1fr;gap:10px;align-content:start}
+.room{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:18px 12px;text-align:left;color:var(--tx)}
+.room b{display:block;font-size:17px}
+.room span{color:var(--sub);font-size:13px}
+.room:active{border-color:var(--ac)}
+#chat{display:none;flex:1;min-height:0;flex-direction:column}
+#msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
+.m{max-width:80%;align-self:flex-start}
+.m .n{font-size:12px;color:var(--sub);margin:0 4px 2px}
+.m .t{background:var(--ot);padding:8px 12px;border-radius:14px;white-space:pre-wrap;word-break:break-word}
+.m.me{align-self:flex-end}.m.me .n{text-align:right}
+.m.me .t{background:var(--ac);color:#fff}
+.sys{align-self:center;color:var(--sys);font-size:12px}
+.bar{display:flex;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--bd);background:var(--card)}
+.bar input{flex:1;border:1px solid var(--bd);background:var(--bg);color:var(--tx);border-radius:20px;padding:10px 14px;font:inherit;min-width:0}
+.bar button{background:var(--ac);color:#fff;border:0;border-radius:20px;padding:0 18px}
+#mem{display:none;position:absolute;top:56px;right:8px;width:230px;max-height:60%;overflow:auto;background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:8px;z-index:5;box-shadow:0 6px 20px rgba(0,0,0,.2)}
+#mem div{display:flex;align-items:center;justify-content:space-between;padding:6px 8px;gap:8px}
+#mem .lk{display:block;width:100%;background:var(--ac);margin-bottom:6px;padding:6px}
+#mem button{background:var(--red);color:#fff;border:0;border-radius:8px;padding:3px 10px;font-size:13px}
+#toast{position:fixed;top:calc(12px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%) translateY(-80px);background:#1f1f1d;color:#fff;padding:10px 18px;border-radius:24px;z-index:30;transition:transform .25s;font-size:14px;pointer-events:none;max-width:90%}
+#toast.on{transform:translateX(-50%) translateY(0)}
+#qrbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);align-items:center;justify-content:center;z-index:20}
+#qrcard{background:#fff;color:#111;border-radius:16px;padding:20px;text-align:center;max-width:300px}
+#qrimg{display:flex;justify-content:center;min-height:200px;align-items:center}
+#qrcard p{font-size:12px;word-break:break-all;margin:10px 0}
+#qrcard button{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:8px 20px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <button class="lnk" id="back" style="display:none">← 목록</button>
+    <h1 id="title">채팅방</h1>
+    <button class="lnk" id="memBtn" style="display:none">👥 <span id="cnt">0</span></button>
+    <button class="lnk" id="qrbtn">QR</button>
+    <button class="lnk" id="admBtn">제작자</button>
+    <input class="nick" id="nick" maxlength="16" placeholder="닉네임">
+  </header>
+  <div id="mem"></div>
+  <div id="list"></div>
+  <div id="chat">
+    <div id="msgs"></div>
+    <div class="bar"><input id="inp" maxlength="1000" placeholder="메시지 입력" autocomplete="off"><button id="send">전송</button></div>
+  </div>
+</div>
+<div id="toast"></div>
+<div id="qrbox"><div id="qrcard"><b>QR로 입장하기</b><div id="qrimg"></div><p id="qrurl"></p><button id="qrclose">닫기</button></div></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+const SUPABASE_URL="https://gpxyjtojyuzbqpatfguu.supabase.co";
+const SUPABASE_KEY="sb_publishable_Wvo5-7IRMotiVQ_aPJthsA_Y727cpJM";
+const sb=supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
+
+const $=id=>document.getElementById(id);
+const S=k=>{try{return localStorage.getItem(k)}catch(e){return null}};
+const W=(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}};
+let cid=S("cid"); if(!cid){cid=Math.random().toString(36).slice(2)+Date.now().toString(36);W("cid",cid)}
+let nick=S("nick")||("익명"+Math.floor(Math.random()*9000+1000));
+$("nick").value=nick;
+$("nick").onchange=()=>{nick=$("nick").value.trim()||nick;$("nick").value=nick;W("nick",nick)};
+
+let room=null,sid=null,token=null,host=null,members=[],locked=false,ready=false,busy=false,ch=null,hb=null;
+let adminToken=null; // 메모리에만 보관: 새로고침하면 비밀번호를 다시 입력해야 해요
+
+// 알림
+let toastT=null;
+function beep(){try{const a=new(window.AudioContext||window.webkitAudioContext)(),o=a.createOscillator(),g=a.createGain();o.connect(g);g.connect(a.destination);o.frequency.value=880;g.gain.value=.08;o.start();o.stop(a.currentTime+.15)}catch(e){}}
+function toast(t){const e=$("toast");e.textContent=t;e.classList.add("on");beep();clearTimeout(toastT);toastT=setTimeout(()=>e.classList.remove("on"),3000)}
+
+// 제작자
+function admLabel(){$("admBtn").textContent=adminToken?"제작자 ✓":"제작자"}
+$("admBtn").onclick=async()=>{
+  if(adminToken){adminToken=null;admLabel();alert("제작자 권한을 껐어요.");return}
+  const pw=prompt("제작자 비밀번호");
+  if(!pw)return;
+  const {data,error}=await sb.rpc("admin_login",{p_password:pw});
+  if(error||!data){alert("서버에 연결할 수 없어요.");return}
+  if(data.error==="too_many"){alert("시도 횟수가 많아요. 10분 뒤에 다시 해주세요.");return}
+  if(data.error){alert("비밀번호가 틀렸어요.");return}
+  adminToken=data.token;admLabel();alert("제작자 권한이 켜졌어요.");
+};
+
+// 로비
+const list=$("list"),counts=[];
+for(let i=1;i<=10;i++){
+  const b=document.createElement("button");b.className="room";
+  b.innerHTML="<b>방"+i+"</b><span>0명</span>";
+  b.onclick=()=>enter("r"+i,"방"+i);
+  list.appendChild(b);counts.push(b.querySelector("span"));
+}
+async function refresh(){
+  if(room)return;
+  const {data}=await sb.rpc("lobby");
+  if(data)data.forEach((x,i)=>{if(counts[i])counts[i].textContent=x.n+"명"+(x.locked?" 🔒":"")});
+}
+refresh();setInterval(refresh,4000);
+
+// 채팅
+function line(m){
+  const box=$("msgs");
+  const near=box.scrollHeight-box.scrollTop-box.clientHeight<80;
+  let d;
+  if(m.sys){d=document.createElement("div");d.className="sys";d.textContent=m.text}
+  else{
+    d=document.createElement("div");d.className="m"+(m.sid===sid?" me":"");
+    const n=document.createElement("div");n.className="n";n.textContent=(m.sid===host?"👑 ":"")+m.nick;
+    const t=document.createElement("div");t.className="t";t.textContent=m.text;
+    d.append(n,t);
+  }
+  box.appendChild(d);
+  if(near||m.sid===sid)box.scrollTop=box.scrollHeight;
+}
+const sys=text=>line({sys:true,text});
+
+function renderMembers(){
+  $("cnt").textContent=members.length+(locked?" 🔒":"");
+  const p=$("mem");p.innerHTML="";
+  if(host===sid){
+    const lb=document.createElement("button");lb.className="lk";
+    lb.textContent=locked?"🔓 방 열기":"🔒 방 잠그기";
+    lb.onclick=async()=>{await sb.rpc("set_lock",{p_room:room,p_token:token,p_locked:!locked});beat()};
+    p.appendChild(lb);
+  }
+  members.forEach(m=>{
+    const r=document.createElement("div");
+    const s=document.createElement("span");
+    s.textContent=(m.sid===host?"👑 ":"")+m.nick+(m.sid===sid?" (나)":"");
+    r.appendChild(s);
+    if(host===sid&&m.sid!==sid){
+      const b=document.createElement("button");b.textContent="추방";
+      b.onclick=async()=>{
+        await sb.rpc("kick",{p_room:room,p_token:token,p_target:m.sid});
+        if(ch)ch.send({type:"broadcast",event:"kick",payload:{target:m.sid}});
+        beat();
+      };
+      r.appendChild(b);
+    }
+    p.appendChild(r);
+  });
+}
+function applyState(st){
+  const old=members,oldHost=host,oldLocked=locked;
+  members=st.members;host=st.host;locked=!!st.locked;
+  if(ready){
+    old.filter(o=>o.sid!==sid&&!members.some(m=>m.sid===o.sid)).forEach(o=>sys(o.nick+"님이 나갔어요"));
+    if(oldHost&&host&&host!==oldHost){const h=members.find(m=>m.sid===host);if(h)sys(h.nick+"님이 새 방장이 됐어요 👑")}
+    if(locked!==oldLocked)sys(locked?"방이 잠겼어요 🔒":"방이 열렸어요 🔓");
+  }
+  renderMembers();
+}
+async function beat(){
+  if(!room||!token)return;
+  const r=room;
+  const {data,error}=await sb.rpc("heartbeat",{p_room:r,p_token:token,p_cid:cid});
+  if(error||!data||room!==r)return;
+  if(data.gone){leave(data.banned?"방장에 의해 추방됐어요. 잠시 후 다시 들어올 수 있어요.":"연결이 끊겨 방에서 나왔어요. 다시 입장해 주세요.");return}
+  applyState(data.state);
+}
+async function enter(id,name){
+  if(busy||room)return;
+  busy=true;
+  const {data,error}=await sb.rpc("join_room",{p_room:id,p_nick:nick,p_cid:cid,p_admin:adminToken});
+  busy=false;
+  if(error||!data){alert("서버에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.");return}
+  if(data.error==="locked"){alert("잠긴 방이에요 🔒");refresh();return}
+  if(data.error==="banned"){alert("추방돼서 잠시 들어갈 수 없어요.");return}
+  if(data.error){alert("입장할 수 없어요.");return}
+  room=id;sid=data.sid;token=data.token;ready=false;
+  members=[];host=null;locked=false;
+  list.style.display="none";$("chat").style.display="flex";
+  $("back").style.display="";$("memBtn").style.display="";$("title").textContent=name;
+  $("msgs").innerHTML='<div class="sys">연결 중…</div>';
+  members=data.state.members;host=data.state.host;locked=!!data.state.locked;renderMembers();
+
+  ch=sb.channel("room-"+id,{config:{broadcast:{self:true}}});
+  ch.on("broadcast",{event:"msg"},({payload})=>line(payload))
+    .on("broadcast",{event:"join"},({payload})=>{
+      sys(payload.nick+"님이 입장했어요");
+      if(payload.sid!==sid)toast("🔔 "+payload.nick+"님이 들어왔어요");
+    })
+    .on("broadcast",{event:"kick"},({payload})=>{if(payload.target===sid)leave("방장에 의해 추방됐어요. 잠시 후 다시 들어올 수 있어요.")})
+    .subscribe(status=>{
+      if(status==="SUBSCRIBED"){
+        $("msgs").innerHTML="";ready=true;
+        ch.send({type:"broadcast",event:"join",payload:{nick,sid}});
+      }
+    });
+  hb=setInterval(beat,4000);
+}
+function leave(msg){
+  const r=room,t=token;
+  clearInterval(hb);hb=null;
+  if(ch){sb.removeChannel(ch);ch=null}
+  room=null;token=null;sid=null;ready=false;
+  $("chat").style.display="none";list.style.display="grid";$("mem").style.display="none";
+  $("back").style.display="none";$("memBtn").style.display="none";$("title").textContent="채팅방";
+  if(r&&t)sb.rpc("leave_room",{p_room:r,p_token:t});
+  refresh();
+  if(msg)alert(msg);
+}
+window.addEventListener("pagehide",()=>{
+  if(room&&token)try{fetch(SUPABASE_URL+"/rest/v1/rpc/leave_room",{method:"POST",keepalive:true,
+    headers:{apikey:SUPABASE_KEY,"Content-Type":"application/json"},body:JSON.stringify({p_room:room,p_token:token})})}catch(e){}
+});
+$("back").onclick=()=>leave();
+$("memBtn").onclick=()=>{const p=$("mem");p.style.display=p.style.display==="block"?"none":"block"};
+function send(){
+  const v=$("inp").value.trim();
+  if(!v||!ready||!ch)return;
+  $("inp").value="";
+  ch.send({type:"broadcast",event:"msg",payload:{sid,nick,text:v.slice(0,1000),ts:Date.now()}});
+}
+$("send").onclick=send;
+$("inp").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.isComposing)send()});
+
+// QR (사이트가 인터넷에 올라간 뒤의 주소로 만들어져요)
+let qrDone=false;
+$("qrbtn").onclick=()=>{
+  const u=location.href.split("#")[0];
+  $("qrbox").style.display="flex";
+  $("qrurl").textContent=location.protocol==="file:"?"아직 인터넷에 올리지 않은 파일이에요. Netlify 등에 올린 주소로 열면 QR이 만들어져요.":u;
+  if(!qrDone&&location.protocol!=="file:"){
+    $("qrimg").innerHTML="";
+    try{new QRCode($("qrimg"),{text:u,width:200,height:200,colorDark:"#000000",colorLight:"#ffffff"});qrDone=true}
+    catch(e){$("qrimg").textContent="QR 생성 실패. 아래 주소를 공유하세요."}
+  }
+};
+$("qrclose").onclick=()=>{$("qrbox").style.display="none"};
+</script>
+</body>
+</html>
