@@ -32,10 +32,18 @@ button{font:inherit;cursor:pointer}
 .bar{display:flex;gap:8px;padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--bd);background:var(--card)}
 .bar input{flex:1;border:1px solid var(--bd);background:var(--bg);color:var(--tx);border-radius:20px;padding:10px 14px;font:inherit;min-width:0}
 .bar button{background:var(--ac);color:#fff;border:0;border-radius:20px;padding:0 18px}
-#mem{display:none;position:absolute;top:56px;right:8px;width:230px;max-height:60%;overflow:auto;background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:8px;z-index:5;box-shadow:0 6px 20px rgba(0,0,0,.2)}
-#mem div{display:flex;align-items:center;justify-content:space-between;padding:6px 8px;gap:8px}
-#mem .lk{display:block;width:100%;background:var(--ac);margin-bottom:6px;padding:6px}
-#mem button{background:var(--red);color:#fff;border:0;border-radius:8px;padding:3px 10px;font-size:13px}
+#roster{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--bd);background:var(--card)}
+#cnt{font-size:13px;color:var(--sub);white-space:nowrap}
+#chips{flex:1;display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+.chip{flex:none;border:1px solid var(--bd);background:var(--bg);color:var(--tx);border-radius:14px;padding:3px 10px;font-size:13px}
+.chip.kickable{border-color:var(--red)}
+#lockBtn{flex:none;background:var(--ac);color:#fff;border:0;border-radius:14px;padding:4px 12px;font-size:13px}
+#lockTag{flex:none;font-size:13px;color:var(--sub)}
+#kickbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);align-items:center;justify-content:center;z-index:25}
+#kickcard{background:var(--card);color:var(--tx);border-radius:16px;padding:18px;text-align:center;width:min(300px,90%)}
+#kickcard .row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:12px 0}
+#kickcard .row button{background:var(--red);color:#fff;border:0;border-radius:10px;padding:10px}
+#kickCancel{background:none;border:0;color:var(--sub)}
 #toast{position:fixed;top:calc(12px + env(safe-area-inset-top,0px));left:50%;transform:translateX(-50%) translateY(-80px);background:#1f1f1d;color:#fff;padding:10px 18px;border-radius:24px;z-index:30;transition:transform .25s;font-size:14px;pointer-events:none;max-width:90%}
 #toast.on{transform:translateX(-50%) translateY(0)}
 #qrbox{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);align-items:center;justify-content:center;z-index:20}
@@ -50,19 +58,19 @@ button{font:inherit;cursor:pointer}
   <header>
     <button class="lnk" id="back" style="display:none">← 목록</button>
     <h1 id="title">채팅방</h1>
-    <button class="lnk" id="memBtn" style="display:none">👥 <span id="cnt">0</span></button>
     <button class="lnk" id="qrbtn">QR</button>
     <button class="lnk" id="admBtn">제작자</button>
     <input class="nick" id="nick" maxlength="16" placeholder="닉네임">
   </header>
-  <div id="mem"></div>
   <div id="list"></div>
   <div id="chat">
+    <div id="roster"><span id="cnt">👥 0</span><div id="chips"></div><button id="lockBtn" style="display:none"></button><span id="lockTag" style="display:none"></span></div>
     <div id="msgs"></div>
     <div class="bar"><input id="inp" maxlength="1000" placeholder="메시지 입력" autocomplete="off"><button id="send">전송</button></div>
   </div>
 </div>
 <div id="toast"></div>
+<div id="kickbox"><div id="kickcard"><b id="kickTitle"></b><div class="row"><button data-min="5">5분</button><button data-min="10">10분</button><button data-min="15">15분</button><button data-min="30">30분</button></div><button id="kickCancel">취소</button></div></div>
 <div id="qrbox"><div id="qrcard"><b>QR로 입장하기</b><div id="qrimg"></div><p id="qrurl"></p><button id="qrclose">닫기</button></div></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -79,6 +87,7 @@ let nick=S("nick")||("익명"+Math.floor(Math.random()*9000+1000));
 $("nick").value=nick;
 $("nick").onchange=()=>{nick=$("nick").value.trim()||nick;$("nick").value=nick;W("nick",nick)};
 
+const justKicked=new Set();
 let room=null,sid=null,token=null,host=null,members=[],locked=false,ready=false,busy=false,ch=null,hb=null;
 let adminToken=null; // 메모리에만 보관: 새로고침하면 비밀번호를 다시 입력해야 해요
 
@@ -133,36 +142,34 @@ function line(m){
 const sys=text=>line({sys:true,text});
 
 function renderMembers(){
-  $("cnt").textContent=members.length+(locked?" 🔒":"");
-  const p=$("mem");p.innerHTML="";
-  if(host===sid){
-    const lb=document.createElement("button");lb.className="lk";
-    lb.textContent=locked?"🔓 방 열기":"🔒 방 잠그기";
-    lb.onclick=async()=>{await sb.rpc("set_lock",{p_room:room,p_token:token,p_locked:!locked});beat()};
-    p.appendChild(lb);
-  }
+  $("cnt").textContent="👥 "+members.length;
+  const ch2=$("chips");ch2.innerHTML="";
   members.forEach(m=>{
-    const r=document.createElement("div");
-    const s=document.createElement("span");
-    s.textContent=(m.sid===host?"👑 ":"")+m.nick+(m.sid===sid?" (나)":"");
-    r.appendChild(s);
-    if(host===sid&&m.sid!==sid){
-      const b=document.createElement("button");b.textContent="추방";
-      b.onclick=async()=>{
-        await sb.rpc("kick",{p_room:room,p_token:token,p_target:m.sid});
-        if(ch)ch.send({type:"broadcast",event:"kick",payload:{target:m.sid}});
-        beat();
-      };
-      r.appendChild(b);
-    }
-    p.appendChild(r);
+    const b=document.createElement("button");b.className="chip";
+    const canKick=host===sid&&m.sid!==sid;
+    b.textContent=(m.sid===host?"👑 ":"")+m.nick+(m.sid===sid?" (나)":"")+(canKick?" ✕":"");
+    if(canKick){b.classList.add("kickable");b.onclick=()=>openKick(m)}
+    ch2.appendChild(b);
   });
+  const lb=$("lockBtn"),lt=$("lockTag");
+  if(host===sid){lb.style.display="";lt.style.display="none";lb.textContent=locked?"🔓 방 열기":"🔒 방 잠그기"}
+  else{lb.style.display="none";lt.style.display=locked?"":"none";lt.textContent="🔒 잠김"}
 }
+let kickTarget=null;
+function openKick(m){kickTarget=m;$("kickTitle").textContent=m.nick+"님을 추방할까요?";$("kickbox").style.display="flex"}
+$("lockBtn").onclick=async()=>{if(!room)return;await sb.rpc("set_lock",{p_room:room,p_token:token,p_locked:!locked});beat()};
+document.querySelectorAll("#kickbox [data-min]").forEach(b=>b.onclick=async()=>{
+  const m=kickTarget;$("kickbox").style.display="none";if(!m||!room)return;
+  const {data}=await sb.rpc("kick",{p_room:room,p_token:token,p_target:m.sid,p_minutes:Number(b.dataset.min)});
+  if(data&&data.ok&&ch)ch.send({type:"broadcast",event:"kick",payload:{target:m.sid,nick:m.nick,minutes:data.minutes}});
+  beat();
+});
+$("kickCancel").onclick=()=>{$("kickbox").style.display="none"};
 function applyState(st){
   const old=members,oldHost=host,oldLocked=locked;
   members=st.members;host=st.host;locked=!!st.locked;
   if(ready){
-    old.filter(o=>o.sid!==sid&&!members.some(m=>m.sid===o.sid)).forEach(o=>sys(o.nick+"님이 나갔어요"));
+    old.filter(o=>o.sid!==sid&&!justKicked.has(o.sid)&&!members.some(m=>m.sid===o.sid)).forEach(o=>sys(o.nick+"님이 나갔어요"));
     if(oldHost&&host&&host!==oldHost){const h=members.find(m=>m.sid===host);if(h)sys(h.nick+"님이 새 방장이 됐어요 👑")}
     if(locked!==oldLocked)sys(locked?"방이 잠겼어요 🔒":"방이 열렸어요 🔓");
   }
@@ -188,7 +195,7 @@ async function enter(id,name){
   room=id;sid=data.sid;token=data.token;ready=false;
   members=[];host=null;locked=false;
   list.style.display="none";$("chat").style.display="flex";
-  $("back").style.display="";$("memBtn").style.display="";$("title").textContent=name;
+  $("back").style.display="";$("title").textContent=name;
   $("msgs").innerHTML='<div class="sys">연결 중…</div>';
   members=data.state.members;host=data.state.host;locked=!!data.state.locked;renderMembers();
 
@@ -198,24 +205,27 @@ async function enter(id,name){
       sys(payload.nick+"님이 입장했어요");
       if(payload.sid!==sid)toast("🔔 "+payload.nick+"님이 들어왔어요");
     })
-    .on("broadcast",{event:"kick"},({payload})=>{if(payload.target===sid)leave("방장에 의해 추방됐어요. 잠시 후 다시 들어올 수 있어요.")})
+    .on("broadcast",{event:"kick"},({payload})=>{justKicked.add(payload.target);if(payload.target===sid)leave("방장에 의해 "+payload.minutes+"분간 추방됐어요.");else sys(payload.nick+"님이 "+payload.minutes+"분간 추방됐어요")})
     .subscribe(status=>{
       if(status==="SUBSCRIBED"){
         $("msgs").innerHTML="";ready=true;
         ch.send({type:"broadcast",event:"join",payload:{nick,sid}});
       }
     });
-  hb=setInterval(beat,4000);
+  hb=setInterval(beat,3000);
 }
 function leave(msg){
   const r=room,t=token;
   clearInterval(hb);hb=null;
   if(ch){sb.removeChannel(ch);ch=null}
   room=null;token=null;sid=null;ready=false;
-  $("chat").style.display="none";list.style.display="grid";$("mem").style.display="none";
-  $("back").style.display="none";$("memBtn").style.display="none";$("title").textContent="채팅방";
-  if(r&&t)sb.rpc("leave_room",{p_room:r,p_token:t});
-  refresh();
+  $("chat").style.display="none";list.style.display="grid";
+  $("back").style.display="none";$("title").textContent="채팅방";
+  counts.forEach(x=>x.textContent="…");
+  (async()=>{ // 나간 게 서버에 반영된 뒤에 인원수를 새로 불러와요
+    if(r&&t){try{await sb.rpc("leave_room",{p_room:r,p_token:t})}catch(e){}}
+    refresh();setTimeout(refresh,1500);
+  })();
   if(msg)alert(msg);
 }
 window.addEventListener("pagehide",()=>{
@@ -223,7 +233,6 @@ window.addEventListener("pagehide",()=>{
     headers:{apikey:SUPABASE_KEY,"Content-Type":"application/json"},body:JSON.stringify({p_room:room,p_token:token})})}catch(e){}
 });
 $("back").onclick=()=>leave();
-$("memBtn").onclick=()=>{const p=$("mem");p.style.display=p.style.display==="block"?"none":"block"};
 function send(){
   const v=$("inp").value.trim();
   if(!v||!ready||!ch)return;
