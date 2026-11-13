@@ -51,6 +51,21 @@ button{font:inherit;cursor:pointer}
 #qrimg{display:flex;justify-content:center;min-height:200px;align-items:center}
 #qrcard p{font-size:12px;word-break:break-all;margin:10px 0}
 #qrcard button{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:8px 20px}
+#chat{position:relative}
+#gp{display:none;position:absolute;inset:0;background:var(--bg);z-index:8;flex-direction:column}
+.gph{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--bd);background:var(--card)}
+#gpBody{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;align-items:center;gap:12px}
+.gcard{width:100%;background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;text-align:left;color:var(--tx)}
+.gbtn{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:9px 16px}
+.gbtn.red{background:var(--red)}.gbtn.gray{background:var(--ot);color:var(--tx)}
+.ttt{display:grid;grid-template-columns:repeat(3,84px);gap:6px}
+.ttt button{width:84px;height:84px;font-size:36px;font-weight:700;background:var(--card);border:1px solid var(--bd);border-radius:10px;color:var(--tx)}
+.rps{display:flex;gap:10px}
+.rps button{width:80px;height:80px;font-size:36px;background:var(--card);border:2px solid var(--bd);border-radius:14px}
+#tc{background:#111;border-radius:8px;height:min(46vh,480px);width:auto;aspect-ratio:1/2;touch-action:none}
+.tctl{display:flex;gap:8px}
+.tctl button{width:54px;height:46px;font-size:20px;background:var(--card);border:1px solid var(--bd);border-radius:10px;color:var(--tx);touch-action:none;user-select:none}
+#gameBtn{flex:none;background:none;border:1px solid var(--bd);color:var(--tx);border-radius:14px;padding:4px 10px;font-size:13px}
 </style>
 </head>
 <body>
@@ -64,8 +79,9 @@ button{font:inherit;cursor:pointer}
   </header>
   <div id="list"></div>
   <div id="chat">
-    <div id="roster"><span id="cnt">👥 0</span><div id="chips"></div><button id="lockBtn" style="display:none"></button><span id="lockTag" style="display:none"></span></div>
+    <div id="roster"><span id="cnt">👥 0</span><div id="chips"></div><button id="gameBtn">🎮 게임</button><button id="lockBtn" style="display:none"></button><span id="lockTag" style="display:none"></span></div>
     <div id="msgs"></div>
+    <div id="gp"><div class="gph"><b id="gpTitle">🎮 게임</b><button class="lnk" id="gpClose">💬 채팅으로</button></div><div id="gpBody"></div></div>
     <div class="bar"><input id="inp" maxlength="1000" placeholder="메시지 입력" autocomplete="off"><button id="send">전송</button></div>
   </div>
 </div>
@@ -120,7 +136,7 @@ for(let i=1;i<=10;i++){
 async function refresh(){
   if(room)return;
   const {data}=await sb.rpc("lobby");
-  if(data)data.forEach((x,i)=>{if(counts[i])counts[i].textContent=x.n+"명"+(x.locked?" 🔒":"")});
+  if(data)data.forEach((x,i)=>{if(counts[i])counts[i].textContent=x.n+"/10명"+(x.locked?" 🔒":"")});
 }
 refresh();setInterval(refresh,4000);
 
@@ -174,6 +190,7 @@ function applyState(st){
     if(locked!==oldLocked)sys(locked?"방이 잠겼어요 🔒":"방이 열렸어요 🔓");
   }
   renderMembers();
+  gamePresence();
 }
 async function beat(){
   if(!room||!token)return;
@@ -191,9 +208,10 @@ async function enter(id,name){
   if(error||!data){alert("서버에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.");return}
   if(data.error==="locked"){alert("잠긴 방이에요 🔒");refresh();return}
   if(data.error==="banned"){alert("추방돼서 잠시 들어갈 수 없어요.");return}
+  if(data.error==="full"){alert("방이 꽉 찼어요 (최대 10명).");refresh();return}
   if(data.error){alert("입장할 수 없어요.");return}
   room=id;sid=data.sid;token=data.token;ready=false;
-  members=[];host=null;locked=false;
+  members=[];host=null;locked=false;game=null;gpOpen=false;$("gp").style.display="none";
   list.style.display="none";$("chat").style.display="flex";
   $("back").style.display="";$("title").textContent=name;
   $("msgs").innerHTML='<div class="sys">연결 중…</div>';
@@ -201,9 +219,11 @@ async function enter(id,name){
 
   ch=sb.channel("room-"+id,{config:{broadcast:{self:true}}});
   ch.on("broadcast",{event:"msg"},({payload})=>line(payload))
+    .on("broadcast",{event:"g"},({payload})=>onGame(payload))
     .on("broadcast",{event:"join"},({payload})=>{
       sys(payload.nick+"님이 입장했어요");
-      if(payload.sid!==sid)toast("🔔 "+payload.nick+"님이 들어왔어요");
+      if(payload.sid!==sid){toast("🔔 "+payload.nick+"님이 들어왔어요");
+        if(game&&game.host===sid&&game.status==="lobby")gsend("open",{id:game.id,type:game.type,host:sid,hostNick:nick,players:game.players})}
     })
     .on("broadcast",{event:"kick"},({payload})=>{justKicked.add(payload.target);if(payload.target===sid)leave("방장에 의해 "+payload.minutes+"분간 추방됐어요.");else sys(payload.nick+"님이 "+payload.minutes+"분간 추방됐어요")})
     .subscribe(status=>{
@@ -216,6 +236,7 @@ async function enter(id,name){
 }
 function leave(msg){
   const r=room,t=token;
+  tetStop();game=null;gpOpen=false;$("gp").style.display="none";
   clearInterval(hb);hb=null;
   if(ch){sb.removeChannel(ch);ch=null}
   room=null;token=null;sid=null;ready=false;
@@ -241,6 +262,300 @@ function send(){
 }
 $("send").onclick=send;
 $("inp").addEventListener("keydown",e=>{if(e.key==="Enter"&&!e.isComposing)send()});
+
+// ───────── 게임 (틱택토 · 가위바위보 · 테트리스) ─────────
+const GAMES={
+  ttt:{name:"틱택토",icon:"⭕",min:2,max:2,desc:"2명 대결 · 3줄 먼저 만들기"},
+  rps:{name:"가위바위보",icon:"✌️",min:2,max:2,desc:"2명 대결 · 먼저 2승"},
+  tetris:{name:"테트리스",icon:"🧱",min:1,max:10,desc:"최대 10명 · 2분 동안 점수 대결"}
+};
+const TET_SECONDS=120;
+let game=null,gpOpen=false;
+const h=(t,a,...k)=>{const e=document.createElement(t);for(const x in (a||{})){if(x==="class")e.className=a[x];else if(x.startsWith("on"))e[x]=a[x];else e.setAttribute(x,a[x])}k.flat().forEach(c=>{if(c!=null)e.append(c)});return e};
+const gsend=(e,extra)=>{if(ch)ch.send({type:"broadcast",event:"g",payload:Object.assign({e,id:game?game.id:null},extra||{})})};
+const inGame=()=>!!game&&game.players.some(p=>p.sid===sid);
+const nameOf=s=>{const p=game&&game.players.find(p=>p.sid===s);return p?p.nick:"?"};
+function openPanel(){gpOpen=true;$("gp").style.display="flex";renderGame()}
+$("gameBtn").onclick=openPanel;
+$("gpClose").onclick=()=>{gpOpen=false;$("gp").style.display="none"};
+
+function openGame(type){
+  if(game)return;
+  gsend("open",{id:Math.random().toString(36).slice(2,8),type,host:sid,hostNick:nick,players:[{sid,nick}]});
+}
+function startGame(){
+  if(!game||game.host!==sid||(game.status!=="lobby"&&game.status!=="end"))return;
+  if(game.players.length<GAMES[game.type].min)return;
+  gsend("start",{seed:Math.floor(Math.random()*2147483647)});
+}
+function onGame(p){
+  if(p.e==="open"){
+    if(game)return;
+    game={id:p.id,type:p.type,host:p.host,hostNick:p.hostNick,players:p.players,status:"lobby"};
+    if(p.host!==sid){
+      sys(p.hostNick+"님이 "+GAMES[p.type].name+" 게임을 열었어요 🎮");
+      toast("🎮 "+p.hostNick+"님이 "+GAMES[p.type].name+"를 열었어요");
+    }
+    renderGame();return;
+  }
+  if(!game||game.id!==p.id)return;
+  const G=GAMES[game.type];
+  if(p.e==="join"){
+    if(game.status==="lobby"&&!game.players.some(x=>x.sid===p.sid)&&game.players.length<G.max){
+      game.players.push({sid:p.sid,nick:p.nick});
+      if(game.host===sid&&G.max===2&&game.players.length===2)startGame();
+    }
+  }else if(p.e==="leave"){game.players=game.players.filter(x=>x.sid!==p.sid)}
+  else if(p.e==="start"){beginGame(p)}
+  else if(p.e==="move"){applyMove(p)}
+  else if(p.e==="score"){
+    if(game.scores&&game.scores[p.sid]){game.scores[p.sid]={score:p.score,lines:p.lines,done:!!p.done};checkTetEnd()}
+  }
+  else if(p.e==="close"){tetStop();game=null}
+  renderGame();
+}
+function beginGame(p){
+  tetStop();
+  game.status="play";game.msg="";
+  if(game.type==="ttt"){
+    const o=p.seed%2?game.players.slice().reverse():game.players.slice();
+    game.xo=[o[0].sid,o[1].sid];game.board=Array(9).fill("");game.turn=0;
+  }
+  if(game.type==="rps"){
+    game.choices={};game.wins={};game.players.forEach(x=>game.wins[x.sid]=0);game.last="";
+  }
+  if(game.type==="tetris"){
+    game.seed=p.seed;game.scores={};game.players.forEach(x=>game.scores[x.sid]={score:0,lines:0,done:false});
+    game.t0=Date.now();game.shell=false;
+  }
+  if(inGame()&&!gpOpen){gpOpen=true;$("gp").style.display="flex"}
+}
+function applyMove(p){
+  if(game.status!=="play")return;
+  if(game.type==="ttt"){
+    if(game.xo[game.turn%2]!==p.sid||game.board[p.cell])return;
+    game.board[p.cell]=game.xo[0]===p.sid?"X":"O";game.turn++;
+    const b=game.board;
+    const w=[[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]].find(l=>b[l[0]]&&b[l[0]]===b[l[1]]&&b[l[0]]===b[l[2]]);
+    if(w){game.status="end";game.msg="🏆 "+nameOf(p.sid)+"님 승리!"}
+    else if(game.turn===9){game.status="end";game.msg="🤝 무승부"}
+  }
+  if(game.type==="rps"){
+    if(game.choices[p.sid]||!game.wins.hasOwnProperty(p.sid))return;
+    game.choices[p.sid]=p.c;
+    const [a,b]=game.players;
+    if(game.choices[a.sid]&&game.choices[b.sid]){
+      const ca=game.choices[a.sid],cb=game.choices[b.sid],E={r:"✊",s:"✌️",p:"✋"},beat={r:"s",s:"p",p:"r"};
+      let res="비겼어요";
+      if(ca!==cb){const win=beat[ca]===cb?a:b;game.wins[win.sid]++;res=win.nick+"님 승리!"}
+      game.last=a.nick+" "+E[ca]+" vs "+E[cb]+" "+b.nick+" → "+res;
+      game.choices={};
+      const win=game.players.find(x=>game.wins[x.sid]>=2);
+      if(win){game.status="end";game.msg="🏆 "+win.nick+"님이 "+game.wins[a.sid]+":"+game.wins[b.sid]+"로 승리!"}
+    }
+  }
+}
+// 사람이 방에서 나갔을 때 게임 정리
+function gamePresence(){
+  if(!game)return;
+  const ids=new Set(members.map(m=>m.sid));
+  game.players=game.players.filter(p=>ids.has(p.sid));
+  if(!ids.has(game.host)){
+    if(game.status==="lobby"||game.players.length===0){tetStop();game=null;renderGame();return}
+    game.host=game.players[0].sid;
+  }
+  if(game.type!=="tetris"&&game.status==="play"&&game.players.length<2){game.status="end";game.msg="상대가 나가서 게임이 끝났어요"}
+  if(game.type==="tetris"&&game.status==="play")checkTetEnd();
+  renderGame();
+}
+
+// ── 화면 ──
+function renderGame(){
+  $("gameBtn").textContent=game?"🎮 진행중":"🎮 게임";
+  if(!gpOpen)return;
+  const b=$("gpBody");
+  if(!game){tetStop();$("gpTitle").textContent="🎮 게임";b.replaceChildren(menuView());return}
+  const G=GAMES[game.type];$("gpTitle").textContent=G.icon+" "+G.name;
+  if(game.status==="lobby"){b.replaceChildren(lobbyView());return}
+  if(game.status==="end"){tetStop();b.replaceChildren(endView());return}
+  if(game.type==="ttt")b.replaceChildren(tttView());
+  else if(game.type==="rps")b.replaceChildren(rpsView());
+  else tetView();
+}
+function menuView(){
+  const w=h("div",{style:"width:100%;display:flex;flex-direction:column;gap:10px"},h("div",{class:"sys"},"같은 방 친구들과 겨뤄보세요"));
+  Object.keys(GAMES).forEach(k=>{
+    const g=GAMES[k];
+    w.append(h("button",{class:"gcard",onclick:()=>openGame(k)},h("b",{},g.icon+" "+g.name),h("br"),h("span",{style:"color:var(--sub);font-size:13px"},g.desc)));
+  });
+  return w;
+}
+function lobbyView(){
+  const G=GAMES[game.type],isHost=game.host===sid,joined=inGame();
+  const w=h("div",{style:"width:100%;display:flex;flex-direction:column;gap:10px;align-items:center"});
+  w.append(h("div",{},game.hostNick+"님이 연 방 · "+game.players.length+"/"+G.max+"명"));
+  const l=h("div",{style:"display:flex;flex-wrap:wrap;gap:6px;justify-content:center"});
+  game.players.forEach(p=>l.append(h("span",{class:"chip"},(p.sid===game.host?"👑 ":"")+p.nick)));
+  w.append(l);
+  const row=h("div",{style:"display:flex;gap:8px;flex-wrap:wrap;justify-content:center"});
+  if(!joined&&game.players.length<G.max)row.append(h("button",{class:"gbtn",onclick:()=>gsend("join",{sid,nick})},"참가하기"));
+  if(joined&&!isHost)row.append(h("button",{class:"gbtn gray",onclick:()=>gsend("leave",{sid})},"참가 취소"));
+  if(isHost&&G.max>2)row.append(h("button",{class:"gbtn",onclick:startGame},"시작하기"));
+  if(isHost)row.append(h("button",{class:"gbtn red",onclick:()=>gsend("close")},"게임 닫기"));
+  w.append(row);
+  if(G.max===2)w.append(h("div",{class:"sys"},"2명이 모이면 자동으로 시작해요"));
+  return w;
+}
+function endView(){
+  const isHost=game.host===sid;
+  const w=h("div",{style:"width:100%;display:flex;flex-direction:column;gap:12px;align-items:center"});
+  w.append(h("div",{style:"font-size:20px;font-weight:700;text-align:center"},game.msg||"끝!"));
+  if(game.type==="tetris"){
+    Object.entries(game.scores).sort((a,b)=>b[1].score-a[1].score).forEach(([s,v],i)=>
+      w.append(h("div",{},(i===0?"🥇 ":i===1?"🥈 ":i===2?"🥉 ":(i+1)+". ")+nameOf(s)+" · "+v.score+"점 ("+v.lines+"줄)")));
+  }
+  if(game.type==="ttt")w.append(tttBoard(false));
+  const row=h("div",{style:"display:flex;gap:8px"});
+  if(isHost&&game.players.length>=GAMES[game.type].min)row.append(h("button",{class:"gbtn",onclick:startGame},"다시 하기"));
+  if(isHost)row.append(h("button",{class:"gbtn red",onclick:()=>gsend("close")},"게임 닫기"));
+  else row.append(h("span",{class:"sys"},"방장이 다시 시작하거나 닫을 수 있어요"));
+  w.append(row);
+  return w;
+}
+function tttBoard(active){
+  const g=h("div",{class:"ttt"});
+  const myTurn=active&&game.status==="play"&&game.xo[game.turn%2]===sid;
+  game.board.forEach((v,i)=>g.append(h("button",{onclick:()=>{if(myTurn&&!v)gsend("move",{sid,cell:i})}},v)));
+  return g;
+}
+function tttView(){
+  const w=h("div",{style:"display:flex;flex-direction:column;gap:12px;align-items:center"});
+  const cur=game.xo[game.turn%2];
+  const mark=s=>game.xo[0]===s?"X":"O";
+  w.append(h("div",{},"X: "+nameOf(game.xo[0])+" · O: "+nameOf(game.xo[1])));
+  w.append(h("div",{style:"font-weight:700"},inGame()?(cur===sid?"내 차례 ("+mark(sid)+")":nameOf(cur)+"님 차례"):nameOf(cur)+"님 차례 (관전 중)"));
+  w.append(tttBoard(inGame()));
+  return w;
+}
+function rpsView(){
+  const w=h("div",{style:"display:flex;flex-direction:column;gap:12px;align-items:center"});
+  const [a,b]=game.players;
+  w.append(h("div",{style:"font-size:18px;font-weight:700"},a.nick+" "+game.wins[a.sid]+" : "+game.wins[b.sid]+" "+b.nick));
+  if(game.last)w.append(h("div",{},game.last));
+  const mine=game.choices[sid];
+  if(inGame()){
+    w.append(h("div",{class:"sys"},mine?"상대를 기다리는 중…":"하나를 골라요"));
+    const row=h("div",{class:"rps"});
+    [["r","✊"],["s","✌️"],["p","✋"]].forEach(([c,e])=>row.append(h("button",{style:mine===c?"border-color:var(--ac)":"",onclick:()=>{if(!game.choices[sid])gsend("move",{sid,c})}},e)));
+    w.append(row);
+  }else w.append(h("div",{class:"sys"},"관전 중"));
+  return w;
+}
+
+// ── 테트리스 ──
+const SH={I:[[0,0,0,0],[1,1,1,1],[0,0,0,0],[0,0,0,0]],O:[[1,1],[1,1]],T:[[0,1,0],[1,1,1],[0,0,0]],S:[[0,1,1],[1,1,0],[0,0,0]],Z:[[1,1,0],[0,1,1],[0,0,0]],J:[[1,0,0],[1,1,1],[0,0,0]],L:[[0,0,1],[1,1,1],[0,0,0]]};
+const COL={I:"#38bdf8",O:"#facc15",T:"#a855f7",S:"#22c55e",Z:"#ef4444",J:"#3b82f6",L:"#f97316"};
+let tet={on:false,timer:null};
+function mulberry(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function makeBag(r){const q=[];return()=>{if(!q.length){const b="IOTSZJL".split("");for(let i=6;i>0;i--){const j=Math.floor(r()*(i+1));[b[i],b[j]]=[b[j],b[i]]}q.push(...b)}return q.shift()}}
+const rotCW=m=>m[0].map((_,i)=>m.map(r=>r[i]).reverse());
+function tHit(m,x,y){for(let r=0;r<m.length;r++)for(let c=0;c<m[r].length;c++)if(m[r][c]){const X=x+c,Y=y+r;if(X<0||X>=10||Y>=20||(Y>=0&&tet.b[Y][X]))return true}return false}
+function tSpawn(){const k=tet.bag(),m=SH[k];tet.cur={k,m,x:Math.floor((10-m[0].length)/2),y:0};if(tHit(m,tet.cur.x,0))tDie()}
+function tLock(){
+  const {m,x,y,k}=tet.cur;
+  m.forEach((row,r)=>row.forEach((v,c)=>{if(v&&y+r>=0)tet.b[y+r][x+c]=COL[k]}));
+  let n=0;
+  for(let r=19;r>=0;r--){if(tet.b[r].every(Boolean)){tet.b.splice(r,1);tet.b.unshift(Array(10).fill(null));n++;r++}}
+  if(n){tet.lines+=n;tet.score+=[0,100,300,500,800][n]*tet.level;tet.level=1+Math.floor(tet.lines/10)}
+  tSpawn();
+}
+function tMove(d){if(tet.alive&&!tHit(tet.cur.m,tet.cur.x+d,tet.cur.y))tet.cur.x+=d}
+function tRot(){if(!tet.alive)return;const m=rotCW(tet.cur.m);for(const d of [0,-1,1,-2,2])if(!tHit(m,tet.cur.x+d,tet.cur.y)){tet.cur.m=m;tet.cur.x+=d;break}}
+function tDown(manual){if(!tet.alive)return;if(!tHit(tet.cur.m,tet.cur.x,tet.cur.y+1)){tet.cur.y++;if(manual)tet.score+=1}else tLock()}
+function tHard(){if(!tet.alive)return;while(!tHit(tet.cur.m,tet.cur.x,tet.cur.y+1)){tet.cur.y++;tet.score+=2}tLock()}
+function tDie(){tet.alive=false;tReport(true)}
+function tReport(done){
+  tet.lastSent=tet.score+"|"+tet.lines;
+  gsend("score",{sid,score:tet.score,lines:tet.lines,done});
+}
+function tDraw(){
+  const cv=$("tc");if(!cv)return;
+  const x=cv.getContext("2d"),S=24;
+  x.fillStyle="#111";x.fillRect(0,0,240,480);
+  x.strokeStyle="#222";x.lineWidth=1;
+  for(let i=1;i<10;i++){x.beginPath();x.moveTo(i*S,0);x.lineTo(i*S,480);x.stroke()}
+  for(let i=1;i<20;i++){x.beginPath();x.moveTo(0,i*S);x.lineTo(240,i*S);x.stroke()}
+  tet.b.forEach((row,r)=>row.forEach((v,c)=>{if(v){x.fillStyle=v;x.fillRect(c*S+1,r*S+1,S-2,S-2)}}));
+  if(tet.alive){x.fillStyle=COL[tet.cur.k];tet.cur.m.forEach((row,r)=>row.forEach((v,c)=>{if(v)x.fillRect((tet.cur.x+c)*S+1,(tet.cur.y+r)*S+1,S-2,S-2)}))}
+  else{x.fillStyle="rgba(0,0,0,.6)";x.fillRect(0,0,240,480);x.fillStyle="#fff";x.font="bold 24px sans-serif";x.textAlign="center";x.fillText(tet.timeUp?"시간 종료":"GAME OVER",120,230);x.font="16px sans-serif";x.fillText(tet.score+"점",120,260)}
+}
+function tKey(e){
+  if(!tet.on||!tet.alive)return;
+  if(document.activeElement&&document.activeElement.tagName==="INPUT")return;
+  const k=e.key;
+  if(k==="ArrowLeft")tMove(-1);else if(k==="ArrowRight")tMove(1);else if(k==="ArrowUp")tRot();
+  else if(k==="ArrowDown")tDown(true);else if(k===" ")tHard();else return;
+  e.preventDefault();tDraw();
+}
+function tetBegin(){
+  tet={on:true,timer:null,b:Array.from({length:20},()=>Array(10).fill(null)),score:0,lines:0,level:1,alive:true,acc:0,last:performance.now(),lastSent:"",lastRep:0,bag:makeBag(mulberry(game.seed))};
+  tSpawn();tDraw();
+  window.addEventListener("keydown",tKey);
+  tet.timer=setInterval(()=>{
+    if(!tet.alive)return;
+    const now=performance.now();tet.acc+=now-tet.last;tet.last=now;
+    const iv=Math.max(100,750-tet.level*60);
+    while(tet.alive&&tet.acc>=iv){tet.acc-=iv;tDown(false)}
+    if(tet.alive&&Date.now()-game.t0>=TET_SECONDS*1000){tet.alive=false;tet.timeUp=true;tReport(true)}
+    if(tet.alive&&now-tet.lastRep>700&&tet.lastSent!==tet.score+"|"+tet.lines){tet.lastRep=now;tReport(false)}
+    tDraw();
+    const left=Math.max(0,TET_SECONDS-Math.floor((Date.now()-game.t0)/1000)),tm=$("ttime");
+    if(tm)tm.textContent="⏱ "+left+"초";
+  },40);
+}
+function tetStop(){
+  if(tet.timer)clearInterval(tet.timer);
+  window.removeEventListener("keydown",tKey);
+  tet={on:false,timer:null};
+}
+function checkTetEnd(){
+  if(!game||game.type!=="tetris"||game.status!=="play")return;
+  const over=Date.now()-game.t0>(TET_SECONDS+8)*1000;
+  if(game.players.every(p=>game.scores[p.sid]&&game.scores[p.sid].done)||over){
+    game.status="end";
+    const sc=game.players.map(p=>[p,game.scores[p.sid].score]).sort((a,b)=>b[1]-a[1]);
+    game.msg=sc.length>1&&sc[0][1]===sc[1][1]?"🤝 공동 1위 ("+sc[0][1]+"점)":"🏆 "+sc[0][0].nick+"님 우승! ("+sc[0][1]+"점)";
+  }
+}
+function tetView(){
+  if(!game.shell){
+    game.shell=true;
+    const b=$("gpBody");
+    const w=h("div",{style:"display:flex;flex-direction:column;align-items:center;gap:10px;width:100%"});
+    w.append(h("div",{id:"ttime",style:"font-weight:700"},"⏱ "+TET_SECONDS+"초"));
+    w.append(h("div",{id:"tsb",style:"display:flex;flex-wrap:wrap;gap:6px;justify-content:center"}));
+    if(inGame()){
+      w.append(h("canvas",{id:"tc",width:"240",height:"480"}));
+      const hold=(txt,fn,rep)=>{
+        const bt=h("button",{},txt);let iv=null;
+        const stop=()=>{clearInterval(iv);iv=null};
+        bt.onpointerdown=e=>{e.preventDefault();fn();tDraw();if(rep){iv=setInterval(()=>{fn();tDraw()},90)}};
+        bt.onpointerup=bt.onpointerleave=bt.onpointercancel=stop;
+        return bt;
+      };
+      w.append(h("div",{class:"tctl"},hold("◀",()=>tMove(-1),1),hold("⟳",tRot),hold("▶",()=>tMove(1),1),hold("▼",()=>tDown(true),1),hold("⤓",tHard)));
+      w.append(h("div",{class:"sys"},"키보드: ← → 이동 · ↑ 회전 · ↓ 천천히 · 스페이스 바로 내리기"));
+    }else w.append(h("div",{class:"sys"},"관전 중 · 점수판만 보여요"));
+    b.replaceChildren(w);
+    if(inGame())tetBegin();
+  }
+  const sb=$("tsb");
+  if(sb){
+    sb.replaceChildren();
+    Object.entries(game.scores).sort((a,b)=>b[1].score-a[1].score).forEach(([s,v])=>
+      sb.append(h("span",{class:"chip",style:s===sid?"border-color:var(--ac)":""},nameOf(s)+" "+v.score+(v.done?" ✔":""))));
+  }
+}
 
 // QR (사이트가 인터넷에 올라간 뒤의 주소로 만들어져요)
 let qrDone=false;
